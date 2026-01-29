@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# Runtime data
+data/checkpoints/*
+!data/checkpoints/.gitkeep
+data/execution.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bun
+bun.lockb
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
