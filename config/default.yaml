@@ -1,0 +1,46 @@
+# Claude Credit Burner - Default Configuration
+# This file contains default settings that can be overridden by environment variables or CLI options
+
+linear:
+  # Linear MCP server URL
+  mcp_url: "https://mcp.linear.app/mcp"
+  # Team ID - set via CLI (--team) or LINEAR_TEAM_ID env var
+  team_id: null
+
+claude:
+  # Claude model to use
+  model: "claude-sonnet-4-20250514"
+  # Maximum tokens for response
+  max_tokens: 8000
+  # Temperature for generation (lower = more deterministic)
+  temperature: 0.3
+
+execution:
+  # Maximum number of tasks to execute in parallel
+  max_parallel: 3
+  # Save checkpoint after every N tasks
+  checkpoint_interval: 1
+  # Dry run mode (no actual API calls)
+  dry_run: false
+
+rate_limits:
+  # Requests per minute (adjust based on your API tier)
+  rpm: 50
+  # Input tokens per minute
+  itpm: 40000
+  # Output tokens per minute
+  otpm: 8000
+  # Base backoff delay in seconds
+  backoff_base: 1.0
+  # Maximum backoff delay in seconds
+  backoff_max: 60.0
+  # Maximum retry attempts
+  max_retries: 10
+
+logging:
+  # Log level: debug, info, warn, error, critical
+  level: "info"
+  # Log file path
+  file: "logs/execution.log"
+  # Enable console output
+  console: true

@@ -1,0 +1,46 @@
+{
+  "name": "claude-credit-burner",
+  "version": "0.1.0",
+  "description": "Autonomous Task Execution CLI - Executes queued development tasks from Linear using Claude API",
+  "type": "module",
+  "main": "src/main.ts",
+  "bin": {
+    "ccb": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "dev": "bun run --watch src/main.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "lint": "bunx biome lint ./src",
+    "format": "bunx biome format --write ./src",
+    "typecheck": "bunx tsc --noEmit",
+    "build": "bun build ./src/main.ts --outdir ./dist --target bun"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.1.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "yaml": "^2.7.0",
+    "better-sqlite3": "^11.8.1",
+    "chalk": "^5.4.1",
+    "ora": "^8.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.2",
+    "@types/better-sqlite3": "^7.6.12",
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [
+    "cli",
+    "automation",
+    "claude",
+    "linear",
+    "task-management",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT"
+}
