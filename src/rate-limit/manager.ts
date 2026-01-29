@@ -44,34 +44,47 @@ export class RateLimitManager {
    * @param estimatedOutputTokens Estimated output tokens for the request
    * @returns Promise that resolves when permission is granted
    */
-  async acquirePermit(estimatedInputTokens: number, estimatedOutputTokens: number = 0): Promise<void> {
+  async acquirePermit(
+    estimatedInputTokens: number,
+    estimatedOutputTokens: number = 0
+  ): Promise<void> {
     const logger = getLogger();
 
-    // Check RPM limit
-    if (!this.rpmBucket.tryConsume(1)) {
-      const waitTime = this.rpmBucket.getWaitTime(1);
-      logger.rateLimit('waiting', { reason: 'rpm', waitTimeMs: waitTime });
-      await sleep(waitTime);
-      return this.acquirePermit(estimatedInputTokens, estimatedOutputTokens);
-    }
+    // Use while loop instead of recursion to prevent stack overflow
+    while (true) {
+      // Check RPM limit
+      if (!this.rpmBucket.tryConsume(1)) {
+        const waitTime = this.rpmBucket.getWaitTime(1);
+        logger.rateLimit('waiting', { reason: 'rpm', waitTimeMs: waitTime });
+        await sleep(waitTime);
+        continue;
+      }
 
-    // Check ITPM limit
-    if (!this.itpmBucket.tryConsume(estimatedInputTokens)) {
-      const waitTime = this.itpmBucket.getWaitTime(estimatedInputTokens);
-      logger.rateLimit('waiting', { reason: 'itpm', waitTimeMs: waitTime });
-      await sleep(waitTime);
-      return this.acquirePermit(estimatedInputTokens, estimatedOutputTokens);
-    }
+      // Check ITPM limit
+      if (!this.itpmBucket.tryConsume(estimatedInputTokens)) {
+        // Restore RPM token since we couldn't proceed
+        this.rpmBucket.setTokens(this.rpmBucket.getAvailable() + 1);
+        const waitTime = this.itpmBucket.getWaitTime(estimatedInputTokens);
+        logger.rateLimit('waiting', { reason: 'itpm', waitTimeMs: waitTime });
+        await sleep(waitTime);
+        continue;
+      }
 
-    // Check OTPM limit (if estimate provided)
-    if (estimatedOutputTokens > 0 && !this.otpmBucket.tryConsume(estimatedOutputTokens)) {
-      const waitTime = this.otpmBucket.getWaitTime(estimatedOutputTokens);
-      logger.rateLimit('waiting', { reason: 'otpm', waitTimeMs: waitTime });
-      await sleep(waitTime);
-      return this.acquirePermit(estimatedInputTokens, estimatedOutputTokens);
-    }
+      // Check OTPM limit (if estimate provided)
+      if (estimatedOutputTokens > 0 && !this.otpmBucket.tryConsume(estimatedOutputTokens)) {
+        // Restore RPM and ITPM tokens since we couldn't proceed
+        this.rpmBucket.setTokens(this.rpmBucket.getAvailable() + 1);
+        this.itpmBucket.setTokens(this.itpmBucket.getAvailable() + estimatedInputTokens);
+        const waitTime = this.otpmBucket.getWaitTime(estimatedOutputTokens);
+        logger.rateLimit('waiting', { reason: 'otpm', waitTimeMs: waitTime });
+        await sleep(waitTime);
+        continue;
+      }
 
-    this.requestCount++;
+      // All limits passed
+      this.requestCount++;
+      return;
+    }
   }
 
   /**
@@ -110,7 +123,10 @@ export class RateLimitManager {
     };
 
     // Parse rate limit headers (Anthropic format)
-    const requestsRemaining = parseInt(getHeader('anthropic-ratelimit-requests-remaining') || '', 10);
+    const requestsRemaining = parseInt(
+      getHeader('anthropic-ratelimit-requests-remaining') || '',
+      10
+    );
     const tokensRemaining = parseInt(getHeader('anthropic-ratelimit-tokens-remaining') || '', 10);
 
     if (!isNaN(requestsRemaining)) {

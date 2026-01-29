@@ -2,8 +2,17 @@
  * Checkpoint Manager - State persistence and recovery
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'fs';
-import { join, basename } from 'path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  unlinkSync,
+  renameSync,
+} from 'fs';
+import { join, dirname } from 'path';
+import { randomBytes } from 'crypto';
 import type { ExecutionState, CheckpointData, CheckpointInfo, ExecutionError } from '../types';
 import { getLogger } from '../utils/logger';
 
@@ -23,10 +32,14 @@ export class CheckpointManager {
 
   /**
    * Generate a unique checkpoint ID
+   * Includes timestamp with milliseconds and random suffix to ensure uniqueness
    */
   private generateCheckpointId(): string {
     const now = new Date();
-    return now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    // Include milliseconds and random suffix to ensure uniqueness
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 23);
+    const random = randomBytes(4).toString('hex');
+    return `${timestamp}-${random}`;
   }
 
   /**
@@ -77,7 +90,8 @@ export class CheckpointManager {
   }
 
   /**
-   * Save current state to a checkpoint
+   * Save current state to a checkpoint using atomic write
+   * Writes to temp file first, then renames to prevent corruption on crash
    */
   saveCheckpoint(state: ExecutionState): string {
     const logger = getLogger();
@@ -88,18 +102,37 @@ export class CheckpointManager {
     this.currentCheckpointId = checkpointId;
 
     const data = this.stateToData(state);
-    const path = this.getCheckpointPath(checkpointId);
+    const finalPath = this.getCheckpointPath(checkpointId);
+
+    // Generate a unique temp file path in the same directory
+    // (same directory ensures atomic rename on same filesystem)
+    const tempSuffix = randomBytes(8).toString('hex');
+    const tempPath = join(dirname(finalPath), `.checkpoint-${checkpointId}-${tempSuffix}.tmp`);
 
     try {
-      writeFileSync(path, JSON.stringify(data, null, 2));
+      // Write to temp file first
+      writeFileSync(tempPath, JSON.stringify(data, null, 2));
+
+      // Atomic rename (atomic on POSIX systems when on same filesystem)
+      renameSync(tempPath, finalPath);
+
       logger.checkpoint('saved', {
         checkpointId,
-        path,
+        path: finalPath,
         completedTasks: state.completedTasks.size,
         failedTasks: state.failedTasks.size,
       });
-      return path;
+      return finalPath;
     } catch (error) {
+      // Clean up temp file if it exists
+      try {
+        if (existsSync(tempPath)) {
+          unlinkSync(tempPath);
+        }
+      } catch {
+        // Ignore cleanup errors
+      }
+
       logger.checkpoint('failed', {
         checkpointId,
         error: error instanceof Error ? error.message : 'Unknown error',

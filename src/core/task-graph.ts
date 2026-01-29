@@ -95,7 +95,9 @@ export class TaskGraph {
     // Check for orphaned dependencies
     const orphaned: Array<{ taskId: string; missingDeps: string[] }> = [];
     for (const [taskId, node] of this.nodes) {
-      const missingDeps = Array.from(node.dependencies).filter((depId) => !this.taskData.has(depId));
+      const missingDeps = Array.from(node.dependencies).filter(
+        (depId) => !this.taskData.has(depId)
+      );
       if (missingDeps.length > 0) {
         orphaned.push({ taskId, missingDeps });
       }

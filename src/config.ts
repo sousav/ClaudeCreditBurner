@@ -6,6 +6,24 @@ import { parse as parseYaml } from 'yaml';
 import { existsSync, readFileSync } from 'fs';
 import type { Config, CLIOptions } from './types';
 
+/**
+ * Convert snake_case keys to camelCase recursively
+ */
+function snakeToCamel(obj: unknown): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map(snakeToCamel);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj as Record<string, unknown>).map(([key, value]) => {
+        const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+        return [camelKey, snakeToCamel(value)];
+      })
+    );
+  }
+  return obj;
+}
+
 const DEFAULT_CONFIG: Config = {
   linear: {
     mcpUrl: 'https://mcp.linear.app/mcp',
@@ -41,13 +59,17 @@ const DEFAULT_CONFIG: Config = {
 
 /**
  * Deep merge two objects, with source overriding target
+ * Target is the complete object, source may be partial
  */
-function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial<T>): T {
+function deepMerge<T extends Record<string, unknown>>(
+  target: T,
+  source: Record<string, unknown>
+): T {
   const result = { ...target };
 
   for (const key in source) {
     const sourceValue = source[key];
-    const targetValue = target[key];
+    const targetValue = (target as Record<string, unknown>)[key];
 
     if (
       sourceValue !== undefined &&
@@ -58,12 +80,12 @@ function deepMerge<T extends Record<string, unknown>>(target: T, source: Partial
       targetValue !== null &&
       !Array.isArray(targetValue)
     ) {
-      result[key] = deepMerge(
+      (result as Record<string, unknown>)[key] = deepMerge(
         targetValue as Record<string, unknown>,
         sourceValue as Record<string, unknown>
-      ) as T[Extract<keyof T, string>];
+      );
     } else if (sourceValue !== undefined) {
-      result[key] = sourceValue as T[Extract<keyof T, string>];
+      (result as Record<string, unknown>)[key] = sourceValue;
     }
   }
 
@@ -79,45 +101,55 @@ function loadConfigFile(path: string): Partial<Config> {
   }
 
   const content = readFileSync(path, 'utf-8');
-  return parseYaml(content) as Partial<Config>;
+  const parsed = parseYaml(content);
+  // Convert snake_case keys to camelCase
+  return snakeToCamel(parsed) as Partial<Config>;
 }
 
 /**
  * Load configuration from environment variables
  */
 function loadEnvConfig(): Partial<Config> {
-  const config: Partial<Config> = {};
+  // Use DeepPartial type for building config incrementally
+  const linear: Partial<Config['linear']> = {};
+  const claude: Partial<Config['claude']> = {};
+  const execution: Partial<Config['execution']> = {};
+  const logging: Partial<Config['logging']> = {};
 
   // Linear configuration
   if (process.env.LINEAR_API_KEY) {
-    config.linear = { ...config.linear, apiKey: process.env.LINEAR_API_KEY };
+    linear.apiKey = process.env.LINEAR_API_KEY;
   }
   if (process.env.LINEAR_TEAM_ID) {
-    config.linear = { ...config.linear, teamId: process.env.LINEAR_TEAM_ID };
+    linear.teamId = process.env.LINEAR_TEAM_ID;
   }
 
   // Claude configuration
   if (process.env.ANTHROPIC_API_KEY) {
-    config.claude = { ...config.claude, apiKey: process.env.ANTHROPIC_API_KEY };
+    claude.apiKey = process.env.ANTHROPIC_API_KEY;
   }
   if (process.env.CLAUDE_MODEL) {
-    config.claude = { ...config.claude, model: process.env.CLAUDE_MODEL };
+    claude.model = process.env.CLAUDE_MODEL;
   }
 
   // Execution configuration
   if (process.env.MAX_PARALLEL) {
-    config.execution = { ...config.execution, maxParallel: parseInt(process.env.MAX_PARALLEL, 10) };
+    execution.maxParallel = parseInt(process.env.MAX_PARALLEL, 10);
   }
 
   // Logging configuration
   if (process.env.LOG_LEVEL) {
-    config.logging = {
-      ...config.logging,
-      level: process.env.LOG_LEVEL as Config['logging']['level'],
-    };
+    logging.level = process.env.LOG_LEVEL as Config['logging']['level'];
   }
 
-  return config;
+  // Build config object with only non-empty sections
+  const config: Record<string, unknown> = {};
+  if (Object.keys(linear).length > 0) config.linear = linear;
+  if (Object.keys(claude).length > 0) config.claude = claude;
+  if (Object.keys(execution).length > 0) config.execution = execution;
+  if (Object.keys(logging).length > 0) config.logging = logging;
+
+  return config as Partial<Config>;
 }
 
 /**

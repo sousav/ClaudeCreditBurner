@@ -17,10 +17,8 @@ interface LockFile {
 export class RecoveryManager {
   private checkpointManager: CheckpointManager;
   private lockFilePath: string;
-  private dataDir: string;
 
   constructor(dataDir: string = 'data') {
-    this.dataDir = dataDir;
     this.lockFilePath = join(dataDir, 'execution.lock');
     this.checkpointManager = new CheckpointManager(join(dataDir, 'checkpoints'));
   }

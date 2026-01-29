@@ -21,13 +21,7 @@ export interface Task {
   estimatedTokens?: number;
 }
 
-export type TaskStatus =
-  | 'backlog'
-  | 'todo'
-  | 'in_progress'
-  | 'in_review'
-  | 'done'
-  | 'cancelled';
+export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled';
 
 export interface ExecutionResult {
   taskId: string;

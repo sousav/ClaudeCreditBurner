@@ -8,10 +8,12 @@ import { PromptBuilder } from './prompt-builder';
 import { Validator } from './validator';
 import { getLogger } from '../utils/logger';
 import { getMetrics } from '../utils/metrics';
+import type { RateLimitManager } from '../rate-limit/manager';
 
 interface ExecutorConfig {
   claudeConfig: ClaudeConfig;
   dryRun?: boolean;
+  rateLimiter?: RateLimitManager;
 }
 
 interface ExecutionContext {
@@ -27,16 +29,25 @@ export class TaskExecutor {
   private promptBuilder: PromptBuilder;
   private validator: Validator;
   private dryRun: boolean;
+  private rateLimiter?: RateLimitManager;
 
   constructor(config: ExecutorConfig) {
     this.config = config.claudeConfig;
     this.dryRun = config.dryRun || false;
+    this.rateLimiter = config.rateLimiter;
     this.promptBuilder = new PromptBuilder();
     this.validator = new Validator();
 
     this.client = new Anthropic({
       apiKey: this.config.apiKey,
     });
+  }
+
+  /**
+   * Set or update the rate limiter
+   */
+  setRateLimiter(rateLimiter: RateLimitManager): void {
+    this.rateLimiter = rateLimiter;
   }
 
   /**
@@ -202,13 +213,44 @@ export class TaskExecutor {
 
       if (status === 429) {
         getMetrics().recordRateLimitHit();
+
+        // Update rate limiter with headers if available
+        if (this.rateLimiter && error.headers) {
+          const headersObj: Record<string, string | string[] | undefined> = {};
+          // Convert Headers to plain object
+          if (error.headers instanceof Headers) {
+            error.headers.forEach((value, key) => {
+              headersObj[key] = value;
+            });
+          } else if (typeof error.headers === 'object') {
+            Object.assign(headersObj, error.headers);
+          }
+          this.rateLimiter.updateFromHeaders(headersObj);
+          getLogger().debug('Updated rate limiter from error headers', {
+            requestsRemaining: headersObj['anthropic-ratelimit-requests-remaining'],
+            tokensRemaining: headersObj['anthropic-ratelimit-tokens-remaining'],
+          });
+        }
+
+        // Extract retry-after header if present
+        let retryAfter: number | undefined;
+        if (error.headers) {
+          const retryAfterHeader =
+            error.headers instanceof Headers
+              ? error.headers.get('retry-after')
+              : (error.headers as Record<string, string>)['retry-after'];
+          if (retryAfterHeader) {
+            retryAfter = parseInt(retryAfterHeader, 10);
+          }
+        }
+
         return {
           code: 'RATE_LIMITED',
           message: 'Rate limit exceeded',
           retryable: true,
           context: {
             status,
-            headers: error.headers,
+            retryAfter,
           },
         };
       }

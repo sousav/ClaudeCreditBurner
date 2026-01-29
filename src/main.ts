@@ -134,87 +134,155 @@ async function executeTaskLoop(
       state.inProgressTasks.add(taskId);
     }
 
-    // Execute batch
-    for (const task of batchTasks) {
-      spinner.start(`Executing: ${task.title}`);
+    // Execute batch in parallel using Promise.allSettled
+    const executeWithRetry = async (
+      task: Task,
+      maxRetries: number = 3
+    ): Promise<ExecutionResult> => {
+      let lastError: Error | null = null;
 
-      try {
-        // Check rate limits
-        const estimatedTokens = 2000; // Rough estimate
-        await rateLimiter.acquirePermit(estimatedTokens);
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          // Check rate limits before each attempt
+          const estimatedTokens = task.estimatedTokens || 2000;
+          await rateLimiter.acquirePermit(estimatedTokens);
 
-        // Execute task
-        const result = await executor.executeTask(task, {
-          completedTasks: Array.from(completedResults.entries())
-            .slice(-5) // Last 5 completed tasks for context
-            .map(([, r]) => ({
-              task: taskGraph.getTask(r.taskId)!,
-              result: r,
-            }))
-            .filter((item) => item.task !== undefined),
-        });
+          // Execute task
+          const result = await executor.executeTask(task, {
+            completedTasks: Array.from(completedResults.entries())
+              .slice(-5) // Last 5 completed tasks for context
+              .map(([, r]) => ({
+                task: taskGraph.getTask(r.taskId)!,
+                result: r,
+              }))
+              .filter((item) => item.task !== undefined),
+          });
 
-        // Record usage
-        rateLimiter.recordUsage(result.tokensUsed);
-        completedResults.set(task.id, result);
+          // Record usage
+          rateLimiter.recordUsage(result.tokensUsed);
 
-        if (result.success) {
-          spinner.succeed(`Completed: ${task.title}`);
-          state.completedTasks.add(task.id);
-          taskGraph.markCompleted(task.id);
-
-          // Update Linear (if not dry run)
-          if (!dryRun) {
-            await linearAdapter.updateTaskStatus(task.id, 'done');
-            await linearAdapter.addExecutionComment(task.id, {
-              success: true,
-              output: result.output,
-              tokensUsed: result.tokensUsed.total,
+          // If retryable error and we have retries left, continue
+          if (!result.success && result.error?.retryable && attempt < maxRetries - 1) {
+            logger.warn(`Task ${task.id} failed with retryable error, retrying...`, {
+              attempt: attempt + 1,
+              maxRetries,
+              error: result.error.message,
             });
-          }
-        } else {
-          spinner.fail(`Failed: ${task.title}`);
-          state.failedTasks.set(task.id, result.error!);
-          taskGraph.markFailed(task.id);
-
-          // Update Linear (if not dry run)
-          if (!dryRun) {
-            await linearAdapter.addExecutionComment(task.id, {
-              success: false,
-              error: result.error?.message,
-              tokensUsed: result.tokensUsed.total,
-            });
+            // Wait with backoff before retrying
+            await rateLimiter.handle429Error();
+            continue;
           }
 
-          // Mark dependent tasks as blocked
-          taskGraph.markBlockedTasks(new Set([task.id]));
+          return result;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error('Unknown error');
+
+          // If this is a rate limit error, wait and retry
+          if (attempt < maxRetries - 1) {
+            logger.warn(`Task ${task.id} threw error, retrying...`, {
+              attempt: attempt + 1,
+              maxRetries,
+              error: lastError.message,
+            });
+            await rateLimiter.handle429Error();
+          }
+        }
+      }
+
+      // All retries exhausted
+      return {
+        taskId: task.id,
+        success: false,
+        error: {
+          code: 'EXECUTION_ERROR',
+          message: lastError?.message || 'Unknown error after retries',
+          retryable: false,
+        },
+        tokensUsed: { input: 0, output: 0, total: 0 },
+        durationMs: 0,
+        timestamp: new Date(),
+      };
+    };
+
+    // Start all tasks in parallel
+    logger.info(`Starting parallel execution of ${batchTasks.length} tasks`);
+    spinner.start(`Executing ${batchTasks.length} tasks in parallel...`);
+
+    const batchPromises = batchTasks.map((task) => executeWithRetry(task));
+    const batchResults = await Promise.allSettled(batchPromises);
+
+    spinner.stop();
+
+    // Process results
+    for (let i = 0; i < batchTasks.length; i++) {
+      const task = batchTasks[i];
+      const settledResult = batchResults[i];
+
+      let result: ExecutionResult;
+
+      if (settledResult.status === 'fulfilled') {
+        result = settledResult.value;
+      } else {
+        // Promise rejected (should be rare with our error handling)
+        result = {
+          taskId: task.id,
+          success: false,
+          error: {
+            code: 'EXECUTION_ERROR',
+            message: settledResult.reason?.message || 'Unknown error',
+            retryable: false,
+          },
+          tokensUsed: { input: 0, output: 0, total: 0 },
+          durationMs: 0,
+          timestamp: new Date(),
+        };
+      }
+
+      completedResults.set(task.id, result);
+
+      if (result.success) {
+        console.log(chalk.green(`  ✓ ${task.title}`));
+        state.completedTasks.add(task.id);
+        taskGraph.markCompleted(task.id);
+
+        // Update Linear (if not dry run)
+        if (!dryRun) {
+          await linearAdapter.updateTaskStatus(task.id, 'done');
+          await linearAdapter.addExecutionComment(task.id, {
+            success: true,
+            output: result.output,
+            tokensUsed: result.tokensUsed.total,
+          });
+        }
+      } else {
+        console.log(chalk.red(`  ✗ ${task.title}: ${result.error?.message}`));
+        state.failedTasks.set(task.id, result.error!);
+        taskGraph.markFailed(task.id);
+
+        // Update Linear (if not dry run)
+        if (!dryRun) {
+          await linearAdapter.addExecutionComment(task.id, {
+            success: false,
+            error: result.error?.message,
+            tokensUsed: result.tokensUsed.total,
+          });
         }
 
-        // Remove from in-progress
-        state.inProgressTasks.delete(task.id);
-
-        // Save checkpoint
-        state.totalTokensUsed += result.tokensUsed.total;
-        state.executionTimeMs = Date.now() - startTime;
-        state.timestamp = new Date();
-        checkpointManager.saveCheckpoint(state);
-      } catch (error) {
-        spinner.fail(`Error: ${task.title}`);
-        logger.error('Task execution error', {
-          taskId: task.id,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-
-        state.failedTasks.set(task.id, {
-          code: 'EXECUTION_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown error',
-          retryable: true,
-        });
-        taskGraph.markFailed(task.id);
-        state.inProgressTasks.delete(task.id);
-        checkpointManager.saveCheckpoint(state);
+        // Mark dependent tasks as blocked
+        taskGraph.markBlockedTasks(new Set([task.id]));
       }
+
+      // Remove from in-progress
+      state.inProgressTasks.delete(task.id);
+
+      // Update total tokens
+      state.totalTokensUsed += result.tokensUsed.total;
     }
+
+    // Save checkpoint after processing all batch results
+    state.executionTimeMs = Date.now() - startTime;
+    state.timestamp = new Date();
+    checkpointManager.saveCheckpoint(state);
   }
 
   // Final summary
@@ -223,7 +291,9 @@ async function executeTaskLoop(
 
   console.log('\n' + chalk.bold('Execution Summary'));
   console.log(chalk.dim('─'.repeat(40)));
-  console.log(`Total tasks:     ${chalk.cyan(counts.completed + counts.failed + counts.blocked + counts.pending)}`);
+  console.log(
+    `Total tasks:     ${chalk.cyan(counts.completed + counts.failed + counts.blocked + counts.pending)}`
+  );
   console.log(`Completed:       ${chalk.green(counts.completed)}`);
   console.log(`Failed:          ${chalk.red(counts.failed)}`);
   console.log(`Blocked:         ${chalk.yellow(counts.blocked)}`);
@@ -339,10 +409,7 @@ async function main(): Promise<void> {
     // Initialize MCP client for Linear
     const spinner = ora('Connecting to Linear...').start();
 
-    const mcpClient = createLinearMCPClient(
-      config.linear.apiKey!,
-      config.linear.mcpUrl
-    );
+    const mcpClient = createLinearMCPClient(config.linear.apiKey!, config.linear.mcpUrl);
 
     const connected = await mcpClient.connect();
     if (!connected) {
@@ -356,10 +423,11 @@ async function main(): Promise<void> {
     // Initialize rate limiter
     const rateLimiter = new RateLimitManager(config.rateLimits);
 
-    // Initialize executor
+    // Initialize executor with rate limiter for header parsing integration
     const executor = new TaskExecutor({
       claudeConfig: config.claude,
       dryRun: config.execution.dryRun,
+      rateLimiter,
     });
 
     // Run execution loop

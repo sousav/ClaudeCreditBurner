@@ -109,14 +109,18 @@ export class LinearAdapter {
     const dependencies: string[] = [];
 
     // Pattern 1: "depends on: XXX-123, XXX-456"
-    const dependsOnMatch = description.match(/depends?\s+on:?\s*([A-Z]+-\d+(?:\s*,\s*[A-Z]+-\d+)*)/i);
+    const dependsOnMatch = description.match(
+      /depends?\s+on:?\s*([A-Z]+-\d+(?:\s*,\s*[A-Z]+-\d+)*)/i
+    );
     if (dependsOnMatch) {
       const ids = dependsOnMatch[1].split(/\s*,\s*/);
       dependencies.push(...ids);
     }
 
     // Pattern 2: "blocked by: XXX-123"
-    const blockedByMatch = description.match(/blocked\s+by:?\s*([A-Z]+-\d+(?:\s*,\s*[A-Z]+-\d+)*)/i);
+    const blockedByMatch = description.match(
+      /blocked\s+by:?\s*([A-Z]+-\d+(?:\s*,\s*[A-Z]+-\d+)*)/i
+    );
     if (blockedByMatch) {
       const ids = blockedByMatch[1].split(/\s*,\s*/);
       dependencies.push(...ids);
@@ -233,7 +237,9 @@ export class LinearAdapter {
       content += `### Output\n\n`;
       // Truncate if too long
       const truncatedOutput =
-        result.output.length > 2000 ? result.output.substring(0, 2000) + '\n\n... (truncated)' : result.output;
+        result.output.length > 2000
+          ? result.output.substring(0, 2000) + '\n\n... (truncated)'
+          : result.output;
       content += `\`\`\`\n${truncatedOutput}\n\`\`\`\n`;
     }
 
